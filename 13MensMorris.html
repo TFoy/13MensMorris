@@ -5,448 +5,246 @@
   <title>13 Men's Morris on a Cube</title>
   <style>
     body { margin: 0; overflow: hidden; background: #222; color: #fff; }
-    canvas { display: block; }
-    .piece { width: 20px; height: 20px; border-radius: 50%; cursor: grab; }
-    #left, #right { position: absolute; top: 80px; display: flex; flex-direction: column; gap: 5px; }
-    #left { left: 20px; } #right { right: 20px; }
+    canvas { display: block; cursor: default; }
     #volume-control { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); }
-    #undo, #help { position: absolute; bottom: 20px; padding: 5px 10px; background: #fff; border: none; cursor: pointer; }
+    #undo, #help, #rematch { position: absolute; bottom: 20px; padding: 5px 10px; background: #fff; border: none; cursor: pointer; }
     #undo { right: 20px; }
     #help { right: 100px; }
+    #rematch { right: 180px; display: none; }
     #turn-indicator { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: bold; }
     #rotation-display { position: absolute; top: 20px; right: 20px; font-size: 14px; color: #0f0; }
     #scoreboard { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #fff; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; }
+    #mobile-indicator { position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%); font-size: 14px; color: yellow; display: none; }
   </style>
 </head>
 <body>
   <div id="turn-indicator"></div>
   <div id="rotation-display"></div>
   <div id="scoreboard"></div>
-  <div id="left"></div>
-  <div id="right"></div>
   <input id="volume-control" type="range" min="0" max="1" step="0.01" value="0.5">
   <button id="undo">Undo</button>
   <button id="help">Help</button>
-  <button id="rematch" style="display:none;position:absolute;bottom:20px;right:180px;padding:5px 10px;background:#fff;border:none;cursor:pointer;">Rematch</button>
+  <button id="rematch">Rematch</button>
+  <div id="mobile-indicator">Tap on a cube intersection to interact</div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
+  <footer style="position:absolute;bottom:0;width:100%;text-align:center;color:#888;font-size:12px;">
+    © 2025 13 Men's Morris on a Cube
+  </footer>
   <script>
   window.onload = function() {
-        // Help button
+    const isTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    if (isTouch) document.getElementById('mobile-indicator').style.display = 'block';
+    document.body.style.cursor = isTouch ? 'pointer' : 'default';
+
+    // UI buttons
     const helpBtn = document.getElementById('help');
-    if (helpBtn) {
-      helpBtn.addEventListener('click', () => {
-        alert(
-          `Rules of 13 Men's Morris on a Cube:
-
-` +
-          `1. Phase 1 (Placement): Players alternate placing spheres on any empty intersection.
-` +
-          `   Form a mill (3 in a row) horizontally or vertically to remove an opponent's sphere.
-` +
-          `2. Phase 2 (Movement): Once all spheres placed, players alternate moving a sphere to an adjacent empty intersection.
-` +
-          `3. Phase 3 (Flying): When reduced to 3 spheres, a player may move to any empty intersection.
-` +
-          `4. Removing: After forming a mill, highlight opponent's spheres and click one to remove.
-` +
-          `5. Winning: A player wins if opponent has fewer than 3 total spheres remaining (in hand + on board), or cannot move.
-` +
-          `6. Undo: Click Undo to revert the last move.`
-        );
-      });
-    }
-
-    // Renderer setup
-    const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.autoClear = false;
-    document.body.appendChild(renderer.domElement);
-    const scene = new THREE.Scene();
-
-    // Camera & controls initialization
-    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
-    const sph = new THREE.Spherical(8, THREE.MathUtils.degToRad(146), THREE.MathUtils.degToRad(29));
-    camera.position.setFromSpherical(sph);
-    camera.rotation.z = THREE.MathUtils.degToRad(35.5);
-    camera.lookAt(0,0,0);
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.update();
-
-    // Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dl = new THREE.DirectionalLight(0xffffff, 0.4); dl.position.set(5,5,5); scene.add(dl);
-
-    // UI references
-    const turnDiv = document.getElementById('turn-indicator');
-    const rotDiv  = document.getElementById('rotation-display');
-    const scoreDiv= document.getElementById('scoreboard');
-    const volCtrl = document.getElementById('volume-control');
-    const undoBtn   = document.getElementById('undo');
+    helpBtn.addEventListener('click', () => {
+      alert(`Rules of 13 Men's Morris on a Cube:\n\n` +
+        `1. Phase 1 (Placement): Players alternate tapping empty intersections.\n` +
+        `2. Phase 2 (Movement): Tap one of your spheres, then an adjacent spot.\n` +
+        `3. Phase 3 (Flying): When at 3 spheres, move to any spot.\n` +
+        `4. Remove opponent's sphere when you form a mill.\n` +
+        `5. Win by reducing opponent to fewer than 3 spheres or blocking them.`);
+    });
     const rematchBtn = document.getElementById('rematch');
-    rematchBtn.addEventListener('click', () => location.reload());
+    rematchBtn.onclick = () => location.reload();
 
     // Audio
     const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     const masterGain = audioCtx.createGain(); masterGain.connect(audioCtx.destination);
-    masterGain.gain.value = parseFloat(volCtrl.value);
-    volCtrl.oninput = e => masterGain.gain.value = parseFloat(e.target.value);
-    function beep(freq, dur) { const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(masterGain);o.frequency.value=freq;o.start();o.stop(audioCtx.currentTime+dur); }
-    function negativeBeep() { beep(220,0.2); }
+    masterGain.gain.value = parseFloat(document.getElementById('volume-control').value);
+    document.getElementById('volume-control').oninput = e => masterGain.gain.value = parseFloat(e.target.value);
+    function beep(freq, dur) { const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.connect(g); g.connect(masterGain); o.frequency.value=freq; o.start(); o.stop(audioCtx.currentTime + dur); }
+    function negativeBeep() { beep(220, 0.2); }
 
-    // Game state variables
+    // Three.js setup
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.autoClear = false;
+    document.body.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45,1,0.1,100);
+    const sph = new THREE.Spherical(8, THREE.MathUtils.degToRad(146), THREE.MathUtils.degToRad(29));
+    camera.position.setFromSpherical(sph); camera.rotation.z = THREE.MathUtils.degToRad(35.5);
+    camera.lookAt(0,0,0);
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.update();
+    scene.add(new THREE.AmbientLight(0xffffff,0.6));
+    const dl = new THREE.DirectionalLight(0xffffff,0.4); dl.position.set(5,5,5); scene.add(dl);
+
+    // UI elements
+    const turnDiv = document.getElementById('turn-indicator');
+    const rotDiv  = document.getElementById('rotation-display');
+    const scoreDiv= document.getElementById('scoreboard');
+    const undoBtn = document.getElementById('undo');
+
+    // Game state
     let currentPlayer=0, removalMode=false;
     const placedCount=[0,0], captureCount=[0,0], history=[];
     const boardState={};
-
     function updateTurn() { turnDiv.textContent = currentPlayer===0?"Fuchsia's Turn":"Green's Turn"; }
-    updateTurn();
- 
-
 
     function updateScores() {
-      const fRem = 13 - placedCount[0];
-      const gRem = 13 - placedCount[1];
-      const fOn = Object.values(boardState).filter(o => o.player === 0).length;
-      const gOn = Object.values(boardState).filter(o => o.player === 1).length;
-      const fCap = captureCount[0];
-      const gCap = captureCount[1];
-      const fAvailable = fOn + fRem;
-      const gAvailable = gOn + gRem;
+      const fRem=13-placedCount[0], gRem=13-placedCount[1];
+      const fOn=Object.values(boardState).filter(o=>o.player===0).length;
+      const gOn=Object.values(boardState).filter(o=>o.player===1).length;
       scoreDiv.innerHTML =
-        `Fuchsia – Remaining: ${fRem}, On board: ${fOn}, Captured: ${fCap}<br>` +
-        `Green   – Remaining: ${gRem}, On board: ${gOn}, Captured: ${gCap}`;
-      if ((fAvailable <= 2 || gAvailable <= 2) && (placedCount[0] + placedCount[1] > 0)) {
-        alert((fAvailable > gAvailable ? 'Fuchsia' : 'Green') + ' wins!');
-        rematchBtn.style.display = 'block';
+        `Fuchsia – Remaining: ${fRem}, On board: ${fOn}, Captured: ${captureCount[0]}<br>` +
+        `Green   – Remaining: ${gRem}, On board: ${gOn}, Captured: ${captureCount[1]}`;
+      if ((fRem+fOn)<3 || (gRem+gOn)<3) {
+        const winner = (fRem+fOn) > (gRem+gOn) ? 'Fuchsia' : 'Green';
+        alert(`${winner} wins!`);
+        rematchBtn.style.display='block';
       }
     }
 
-    // Highlight management
-    const highlights = [];
-    function clearHighlights() {
-      Object.values(boardState).forEach(o => o.mesh.material.emissive.setHex(0x000000));
-      highlights.forEach(h => scene.remove(h));
-      highlights.length = 0;
-    }
-
-    function checkMill(key, player) {
-      const [x0, y0, z0] = key.split(',').map(Number);
-      for (const axis of ['x', 'y', 'z']) {
-        const line = [];
-        for (let v of [-1, 0, 1]) {
-          const p = { x: x0, y: y0, z: z0 };
-          p[axis] = v;
-          line.push(`${p.x},${p.y},${p.z}`);
-        }
-        if (line.every(k => boardState[k] && boardState[k].player === player)) return true;
+    // Highlight/mill logic
+    const highlights=[];
+    function clearHighlights() { highlights.forEach(h=>scene.remove(h)); highlights.length=0; Object.values(boardState).forEach(o=>o.mesh.material.emissive.setHex(0x000000)); }
+    function checkMill(key, pl) {
+      const [x,y,z]=key.split(',').map(Number);
+      for (let ax of ['x','y','z']) {
+        const line=[-1,0,1].map(v=>`${ ax==='x'?v:x },${ ax==='y'?v:y },${ ax==='z'?v:z }`);
+        if (line.every(k=>boardState[k]?.player===pl)) return true;
       }
       return false;
     }
+    function highlightOpponent() { Object.values(boardState).forEach(o=> { if(o.player!==currentPlayer) o.mesh.material.emissive.setHex(0xffff00); }); }
+    function switchTurn() { currentPlayer=1-currentPlayer; updateTurn(); }
 
-    function highlightOpponent() {
-      Object.values(boardState).forEach(o => {
-        if (o.player !== currentPlayer) {
-          o.mesh.material.emissive.setHex(0xffff00);
-        }
-      });
-    }
+    // Cube frame
+    const rodMat=new THREE.MeshBasicMaterial({color:0x0000ff,transparent:true,opacity:0.4});
+    function drawRod(p1,p2) { const dir=p2.clone().sub(p1), geo=new THREE.CylinderGeometry(0.02,0.02,dir.length(),8), rod=new THREE.Mesh(geo,rodMat); rod.position.copy(p1).add(p2).multiplyScalar(0.5); rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.normalize()); scene.add(rod); }
+    const coords=[-1,0,1]; ['x','y','z'].forEach(ax=>coords.forEach(a=>coords.forEach(b=>{ if(a===0&&b===0)return; let p1,p2; if(ax==='x'){p1=new THREE.Vector3(-1,a,b);p2=new THREE.Vector3(1,a,b);} if(ax==='y'){p1=new THREE.Vector3(a,-1,b);p2=new THREE.Vector3(a,1,b);} if(ax==='z'){p1=new THREE.Vector3(a,b,-1);p2=new THREE.Vector3(a,b,1);} drawRod(p1,p2);})));
 
-    function switchTurn() {
-      currentPlayer = 1 - currentPlayer;
-      updateTurn();
-    }
+    // Board points & adjacency
+    const boardPoints=[]; coords.forEach(x=>coords.forEach(y=>coords.forEach(z=>{ if(x===0&&y===0&&z===0) return; boardPoints.push(new THREE.Vector3(x,y,z)); })));
+    const adjacency={}; boardPoints.forEach(p=>adjacency[p.toArray().join(',')]=[]);
+    ['x','y','z'].forEach(ax=>coords.forEach(a=>coords.forEach(b=>{ if(a===0&&b===0)return; let line=[]; if(ax==='x') line=boardPoints.filter(p=>p.y===a&&p.z===b).sort((u,v)=>u.x-v.x); if(ax==='y') line=boardPoints.filter(p=>p.x===a&&p.z===b).sort((u,v)=>u.y-v.y); if(ax==='z') line=boardPoints.filter(p=>p.x===a&&p.y===b).sort((u,v)=>u.z-v.z); line.forEach((p,i)=>{ const k=p.toArray().join(','); if(i>0) adjacency[k].push(line[i-1].toArray().join(',')); if(i<line.length-1) adjacency[k].push(line[i+1].toArray().join(',')); }); })));
+    const boardGeo=new THREE.SphereGeometry(0.1,16,16);
+    const boardMats=[0xFF00FF,0x89F336].map(c=>new THREE.MeshPhongMaterial({color:c}));
 
-    // Cube frame and rods
-    const rodMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.4 });
-    function drawRod(p1, p2) {
-      const dir = p2.clone().sub(p1);
-      const geometry = new THREE.CylinderGeometry(0.02, 0.02, dir.length(), 8);
-      const rod = new THREE.Mesh(geometry, rodMaterial);
-      rod.position.copy(p1).add(p2).multiplyScalar(0.5);
-      rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
-      scene.add(rod);
-    }
+    // Placement/Movement/Flying and removal via taps/clicks
+    let selectedKey=null;
+    renderer.domElement.addEventListener(isTouch?'touchstart':'pointerdown',e=>{
+      e.preventDefault();
+      const x = isTouch?e.touches[0].clientX:e.clientX;
+      const y = isTouch?e.touches[0].clientY:e.clientY;
+      const mouse = new THREE.Vector2((x/window.innerWidth)*2-1, -(y/window.innerHeight)*2+1);
+      const ray = new THREE.Raycaster(); ray.setFromCamera(mouse, camera);
 
-    const coords = [-1, 0, 1];
-    ['x', 'y', 'z'].forEach(axis => {
-      coords.forEach(a => coords.forEach(b => {
-        if (a === 0 && b === 0) return;
-        let p1, p2;
-        if (axis === 'x') { p1 = new THREE.Vector3(-1, a, b); p2 = new THREE.Vector3(1, a, b); }
-        if (axis === 'y') { p1 = new THREE.Vector3(a, -1, b); p2 = new THREE.Vector3(a, 1, b); }
-        if (axis === 'z') { p1 = new THREE.Vector3(a, b, -1); p2 = new THREE.Vector3(a, b, 1); }
-        drawRod(p1, p2);
-      }));
-    });
-
-    // Board points and adjacency
-    const boardPoints = [];
-    coords.forEach(x => coords.forEach(y => coords.forEach(z => {
-      if (x === 0 && y === 0 && z === 0) return;
-      boardPoints.push(new THREE.Vector3(x, y, z));
-    })));
-
-    const adjacency = {};
-    boardPoints.forEach(p => adjacency[p.toArray().join(',')] = []);
-    ['x', 'y', 'z'].forEach(axis => {
-      coords.forEach(a => coords.forEach(b => {
-        if (a === 0 && b === 0) return;
-        let line = [];
-        if (axis === 'x') line = boardPoints.filter(p => p.y === a && p.z === b).sort((u,v) => u.x - v.x);
-        if (axis === 'y') line = boardPoints.filter(p => p.x === a && p.z === b).sort((u,v) => u.y - v.y);
-        if (axis === 'z') line = boardPoints.filter(p => p.x === a && p.y === b).sort((u,v) => u.z - v.z);
-        line.forEach((p, i) => {
-          const key = p.toArray().join(',');
-          if (i > 0) adjacency[key].push(line[i-1].toArray().join(','));
-          if (i < line.length-1) adjacency[key].push(line[i+1].toArray().join(','));
-        });
-      }));
-    });
-
-    const boardGeo = new THREE.SphereGeometry(0.1, 16, 16);
-    const boardMats = [0xFF00FF, 0x89F336].map(color => new THREE.MeshPhongMaterial({ color }));
-
-    // Create side stacks
-    const leftStack = document.getElementById('left');
-    const rightStack = document.getElementById('right');
-    let dragPlayer = null;
-
-    function createPieceDiv(player) {
-      const div = document.createElement('div');
-      div.className = 'piece';
-      div.style.background = player === 0 ? '#FF00FF' : '#89F336';
-      div.draggable = true;
-      div.ondragstart = e => {
-        if (player !== currentPlayer || removalMode) e.preventDefault();
-        else dragPlayer = player;
-      };
-      div.ondragend = e => {
-        const p = dragPlayer;
-        dragPlayer = null;
-        const key = placePhase1(e.clientX, e.clientY, p);
-        if (key) {
-          history.push({ type: 'place', player: p, key });
-          div.remove();
-        } else {
-          if (p === 0) leftStack.appendChild(div);
-          else rightStack.appendChild(div);
-        }
-      };
-      return div;
-    }
-
-    for (let i = 0; i < 13; i++) {
-      leftStack.appendChild(createPieceDiv(0));
-      rightStack.appendChild(createPieceDiv(1));
-    }
-
-    // Phase 1: placement
-    function placePhase1(cx, cy, player) {
-      if (placedCount[player] >= 13) return null;
-      const m = new THREE.Vector2((cx/window.innerWidth)*2-1, -(cy/window.innerHeight)*2+1);
-      const ray = new THREE.Raycaster();
-      ray.setFromCamera(m, camera);
-      let best = null;
-      let bestDist = Infinity;
-      boardPoints.forEach(p => {
-        const proj = p.clone().project(camera);
-        const sx = (proj.x*0.5 + 0.5)*window.innerWidth;
-        const sy = ( -proj.y*0.5 + 0.5)*window.innerHeight;
-        const d = Math.hypot(sx-cx, sy-cy);
-        if (d < bestDist) {
-          bestDist = d;
-          best = p;
-        }
-      });
-      if (best && bestDist < 30) {
-        const key = best.toArray().join(',');
-        if (!boardState[key]) {
-          addPiece(key, player);
-          placedCount[player]++;
-          return key;
-        }
-      }
-      return null;
-    }
-
-    function addPiece(key, player) {
-      const [x, y, z] = key.split(',').map(Number);
-      const mesh = new THREE.Mesh(boardGeo, boardMats[player]);
-      mesh.position.set(x, y, z);
-      scene.add(mesh);
-      boardState[key] = { player, mesh };
-      beep(440, 0.1);
-      updateScores();
-      if (checkMill(key, player)) {
-        beep(880, 0.2);
-        highlightOpponent();
-        removalMode = true;
-      } else {
-        switchTurn();
-      }
-    }
-
-    // Phase 2 & 3: move / fly
-    let selectedKey = null;
-    renderer.domElement.addEventListener('pointerdown', e => {
-      if (removalMode) return;
-      if (placedCount[0] + placedCount[1] < 26) return;
-      const m = new THREE.Vector2((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1);
-      const ray = new THREE.Raycaster();
-      ray.setFromCamera(m, camera);
-      if (!selectedKey) {
-        const hits = ray.intersectObjects(Object.values(boardState).map(o => o.mesh));
-        if (hits.length) {
-          const mesh = hits[0].object;
-          const key = Object.keys(boardState).find(k => boardState[k].mesh === mesh);
-          if (boardState[key].player === currentPlayer) {
-            const countPieces = Object.values(boardState).filter(o=>o.player===currentPlayer).length;
-            let possible;
-            if (countPieces > 3) {
-            // normal move: adjacent
-            possible = adjacency[key].filter(k => !boardState[k]);
-          } else {
-            // flying: any empty point
-            possible = boardPoints.map(p => p.toArray().join(',')).filter(k => !boardState[k]);
+      // Removal mode
+      if(removalMode) {
+        document.body.style.cursor='crosshair';
+        const hit = ray.intersectObjects(Object.values(boardState).map(o=>o.mesh))[0];
+        if(hit) {
+          const key = Object.keys(boardState).find(k=>boardState[k].mesh===hit.object);
+          if(boardState[key].player!==currentPlayer) {
+            history.push({type:'remove', key, player:boardState[key].player});
+            scene.remove(hit.object);
+            delete boardState[key];
+            captureCount[boardState[key]?.player||0]++;
+            removalMode=false;
+            switchTurn();
+            updateScores();
+            clearHighlights();
+            document.body.style.cursor = isTouch ? 'pointer' : 'default';
           }
-            if (possible.length) {
-              selectedKey = key;
-              mesh.material.emissive.setHex(0x0000ff);
-              possible.forEach(dest => {
-                const [dx, dy, dz] = dest.split(',').map(Number);
-                const hint = new THREE.Mesh(
-                  new THREE.SphereGeometry(0.12, 8, 8),
-                  new THREE.MeshBasicMaterial({ color:0xffff00, transparent:true, opacity:0.6 })
-                );
-                hint.position.set(dx, dy, dz);
-                hint.userData.key = dest;
+        }
+        return;
+      }
+
+      // Phase 1: placement
+      if(placedCount[0]+placedCount[1] < 26) {
+        const hit = ray.intersectObjects(boardPoints.map(p=>{ const s=new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshBasicMaterial({visible:false})); s.position.copy(p); return s;}))[0];
+        // simplified: iterate boardPoints manually
+        let closest=null, minD=Infinity;
+        boardPoints.forEach(p=>{
+          const proj=p.clone().project(camera);
+          const sx=(proj.x*0.5+0.5)*window.innerWidth;
+          const sy=(-proj.y*0.5+0.5)*window.innerHeight;
+          const d=Math.hypot(sx-x,sy-y);
+          if(d<minD) {minD=d;closest=p;}
+        });
+        if(minD<30) {
+          const key=closest.toArray().join(',');
+          if(!boardState[key]) {
+            const mesh=new THREE.Mesh(boardGeo, boardMats[currentPlayer]);
+            mesh.position.copy(closest);
+            scene.add(mesh);
+            boardState[key]={player:currentPlayer,mesh};
+            placedCount[currentPlayer]++;
+            history.push({type:'place',player:currentPlayer,key});
+            beep(440,0.1);
+            updateScores();
+            if(checkMill(key,currentPlayer)) { removalMode=true; highlightOpponent(); }
+            else { switchTurn(); document.body.style.cursor=isTouch?'pointer':'default'; }
+          }
+        }
+        return;
+      }
+
+      // Phase 2 & 3: move / fly
+      const hit = ray.intersectObjects(Object.values(boardState).map(o=>o.mesh))[0];
+      if(!selectedKey) {
+        if(hit) {
+          const key = Object.keys(boardState).find(k=>boardState[k].mesh===hit.object);
+          if(boardState[key].player===currentPlayer) {
+            const count=Object.values(boardState).filter(o=>o.player===currentPlayer).length;
+            let possible = count>3 ? adjacency[key].filter(k=>!boardState[k]) : boardPoints.map(p=>p.toArray().join(',')).filter(k=>!boardState[k]);
+            if(possible.length) {
+              selectedKey=key;
+              hit.object.material.emissive.setHex(0x0000ff);
+              document.body.style.cursor='move';
+              possible.forEach(dest=>{
+                const p=dest.split(',').map(Number);
+                const hint=new THREE.Mesh(new THREE.SphereGeometry(0.12,8,8),new THREE.MeshBasicMaterial({color:0xffff00,transparent:true,opacity:0.6}));
+                hint.position.set(...p);
+                hint.userData.dest=dest;
                 scene.add(hint);
                 highlights.push(hint);
               });
-            } else {
-              negativeBeep();
-            }
+            } else negativeBeep();
           }
         }
       } else {
-        const hits = ray.intersectObjects(highlights);
-        if (hits.length) {
-          const dest = hits[0].object.userData.key;
-          history.push({ type:'move', from:selectedKey, to:dest, player:currentPlayer });
-          const obj = boardState[selectedKey];
+        const hintHit = ray.intersectObjects(highlights)[0];
+        if(hintHit) {
+          const dest=hintHit.object.userData.dest;
+          const obj=boardState[selectedKey];
           delete boardState[selectedKey];
-          obj.mesh.material.emissive.setHex(0x000000);
-          obj.mesh.position.copy(hits[0].object.position);
-          boardState[dest] = { player: currentPlayer, mesh: obj.mesh };
-          beep(440, 0.1);
+          obj.mesh.position.copy(hintHit.object.position);
+          boardState[dest]={player:currentPlayer,mesh:obj.mesh};
+          history.push({type:'move',from:selectedKey,to:dest,player:currentPlayer});
+          beep(440,0.1);
           updateScores();
-          if (checkMill(dest, currentPlayer)) {
-            beep(880, 0.2);
-            highlightOpponent();
-            removalMode = true;
-          } else {
-            switchTurn();
-          }
+          if(checkMill(dest,currentPlayer)) { removalMode=true; highlightOpponent(); }
+          else { switchTurn(); document.body.style.cursor=isTouch?'pointer':'default'; }
         }
-        if (boardState[selectedKey]) boardState[selectedKey].mesh.material.emissive.setHex(0x000000);
-        selectedKey = null;
         clearHighlights();
+        selectedKey=null;
       }
     });
-
-    // Removal
-    renderer.domElement.addEventListener('pointerup', e => {
-      if (!removalMode) return;
-      const m = new THREE.Vector2((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1);
-      const ray = new THREE.Raycaster();
-      ray.setFromCamera(m, camera);
-      const hits = ray.intersectObjects(Object.values(boardState).map(o => o.mesh));
-      if (hits.length) {
-        const mesh = hits[0].object;
-        const key = Object.keys(boardState).find(k => boardState[k].mesh===mesh);
-        if (boardState[key].player !== currentPlayer) {
-          history.push({ type:'remove', key, player: boardState[key].player });
-          const rp = boardState[key].player;
-          scene.remove(mesh);
-          delete boardState[key];
-          captureCount[rp]++;
-          updateScores();
-          clearHighlights();
-          removalMode=false;
-          switchTurn();
-          beep(330, 0.1);
-          checkBlockLoss();
-        }
-      }
-    });
-    function checkBlockLoss() {
-      const opp = currentPlayer;
-      for (const [k, v] of Object.entries(boardState)) {
-        if (v.player !== opp) continue;
-        for (const adj of adjacency[k]) {
-          if (!boardState[adj]) return;
-        }
-      }
-      alert((opp ? 'Green' : 'Fuchsia') + ' has no moves and loses!');
-    }
 
     // Undo
     undoBtn.onclick = () => {
-      const act = history.pop();
-      if (!act) return;
-      if (act.type==='place') {
-        const o = boardState[act.key];
-        scene.remove(o.mesh);
-        delete boardState[act.key];
-        placedCount[act.player]--;
-        updateScores();
-        switchTurn();
-        const div = createPieceDiv(act.player);
-        if (act.player===0) leftStack.appendChild(div);
-        else rightStack.appendChild(div);
-      } else if (act.type==='move') {
-        const o = boardState[act.to];
-        o.mesh.position.copy(new THREE.Vector3(...act.from.split(',').map(Number)));
-        delete boardState[act.to];
-        boardState[act.from] = o;
-        updateScores();
-        switchTurn();
-      } else if (act.type==='remove') {
-        const mesh = new THREE.Mesh(boardGeo, boardMats[act.player]);
-        mesh.position.copy(new THREE.Vector3(...act.key.split(',').map(Number)));
-        scene.add(mesh);
-        boardState[act.key] = { player:act.player, mesh };
-        updateScores();
-        switchTurn();
+      const act=history.pop(); if(!act) return;
+      if(act.type==='place') {
+        const o=boardState[act.key]; scene.remove(o.mesh); delete boardState[act.key]; placedCount[act.player]--; updateScores(); switchTurn();
+      } else if(act.type==='move') {
+        const o=boardState[act.to]; o.mesh.position.copy(new THREE.Vector3(...act.from.split(',').map(Number))); delete boardState[act.to]; boardState[act.from]=o; updateScores(); switchTurn();
+      } else if(act.type==='remove') {
+        const mesh=new THREE.Mesh(boardGeo, boardMats[act.player]); mesh.position.copy(new THREE.Vector3(...act.key.split(',').map(Number))); scene.add(mesh); boardState[act.key]={player:act.player,mesh}; captureCount[act.player]--; updateScores(); switchTurn();
       }
-      clearHighlights();
-      removalMode=false;
+      clearHighlights(); removalMode=false;
     };
 
-    // Resize & render loop
-    function onResize() {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-    }
-    window.addEventListener('resize', onResize);
-    onResize();
-    (function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.clear();
-      renderer.render(scene, camera);
-      const rx = THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1);
-      const ry = THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1);
-      const rz = THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1);
-      rotDiv.innerText = `Rot: X ${rx}°, Y ${ry}°, Z ${rz}°`;
-    })();
+    // Resize & animate
+    function onResize(){ renderer.setSize(window.innerWidth,window.innerHeight); camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); }
+    window.addEventListener('resize',onResize); onResize();
+    (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.clear(); renderer.render(scene,camera); const rx=THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1); const ry=THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1); const rz=THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1); rotDiv.innerText=`Rot: X ${rx}°, Y ${ry}°, Z ${rz}°`; })();
 
-    updateScores();
+    updateTurn(); updateScores();
   };
   </script>
-<footer style="position:absolute;bottom:0;width:100%;text-align:center;color:#888;font-size:12px;">
-  © 2025 13 Men's Morris on a Cube
-</footer>
 </body>
 </html>
-
