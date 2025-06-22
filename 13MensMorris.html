@@ -1,0 +1,449 @@
+   <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>13 Men's Morris on a Cube</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #222; color: #fff; }
+    canvas { display: block; }
+    .piece { width: 20px; height: 20px; border-radius: 50%; cursor: grab; }
+    #left, #right { position: absolute; top: 80px; display: flex; flex-direction: column; gap: 5px; }
+    #left { left: 20px; } #right { right: 20px; }
+    #volume-control { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); }
+    #undo, #help { position: absolute; bottom: 20px; padding: 5px 10px; background: #fff; border: none; cursor: pointer; }
+    #undo { right: 20px; }
+    #help { right: 100px; }
+    #turn-indicator { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: bold; }
+    #rotation-display { position: absolute; top: 20px; right: 20px; font-size: 14px; color: #0f0; }
+    #scoreboard { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #fff; background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="turn-indicator"></div>
+  <div id="rotation-display"></div>
+  <div id="scoreboard"></div>
+  <div id="left"></div>
+  <div id="right"></div>
+  <input id="volume-control" type="range" min="0" max="1" step="0.01" value="0.5">
+  <button id="undo">Undo</button>
+  <button id="help">Help</button>
+  <button id="rematch" style="display:none;position:absolute;bottom:20px;right:180px;padding:5px 10px;background:#fff;border:none;cursor:pointer;">Rematch</button>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
+  <script>
+  window.onload = function() {
+        // Help button
+    const helpBtn = document.getElementById('help');
+    if (helpBtn) {
+      helpBtn.addEventListener('click', () => {
+        alert(
+          `Rules of 13 Men's Morris on a Cube:
+
+` +
+          `1. Phase 1 (Placement): Players alternate placing spheres on any empty intersection.
+` +
+          `   Form a mill (3 in a row) horizontally or vertically to remove an opponent's sphere.
+` +
+          `2. Phase 2 (Movement): Once all spheres placed, players alternate moving a sphere to an adjacent empty intersection.
+` +
+          `3. Phase 3 (Flying): When reduced to 3 spheres, a player may move to any empty intersection.
+` +
+          `4. Removing: After forming a mill, highlight opponent's spheres and click one to remove.
+` +
+          `5. Winning: A player wins if opponent has fewer than 3 total spheres remaining (in hand + on board), or cannot move.
+` +
+          `6. Undo: Click Undo to revert the last move.`
+        );
+      });
+    }
+
+    // Renderer setup
+    const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.autoClear = false;
+    document.body.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+
+    // Camera & controls initialization
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+    const sph = new THREE.Spherical(8, THREE.MathUtils.degToRad(146), THREE.MathUtils.degToRad(29));
+    camera.position.setFromSpherical(sph);
+    camera.rotation.z = THREE.MathUtils.degToRad(35.5);
+    camera.lookAt(0,0,0);
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.update();
+
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dl = new THREE.DirectionalLight(0xffffff, 0.4); dl.position.set(5,5,5); scene.add(dl);
+
+    // UI references
+    const turnDiv = document.getElementById('turn-indicator');
+    const rotDiv  = document.getElementById('rotation-display');
+    const scoreDiv= document.getElementById('scoreboard');
+    const volCtrl = document.getElementById('volume-control');
+    const undoBtn   = document.getElementById('undo');
+    const rematchBtn = document.getElementById('rematch');
+    rematchBtn.addEventListener('click', () => location.reload());
+
+    // Audio
+    const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const masterGain = audioCtx.createGain(); masterGain.connect(audioCtx.destination);
+    masterGain.gain.value = parseFloat(volCtrl.value);
+    volCtrl.oninput = e => masterGain.gain.value = parseFloat(e.target.value);
+    function beep(freq, dur) { const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(masterGain);o.frequency.value=freq;o.start();o.stop(audioCtx.currentTime+dur); }
+    function negativeBeep() { beep(220,0.2); }
+
+    // Game state variables
+    let currentPlayer=0, removalMode=false;
+    const placedCount=[0,0], captureCount=[0,0], history=[];
+    const boardState={};
+
+    function updateTurn() { turnDiv.textContent = currentPlayer===0?"Fuchsia's Turn":"Green's Turn"; }
+    updateTurn();
+ 
+
+
+    function updateScores() {
+      const fRem = 13 - placedCount[0];
+      const gRem = 13 - placedCount[1];
+      const fOn = Object.values(boardState).filter(o => o.player === 0).length;
+      const gOn = Object.values(boardState).filter(o => o.player === 1).length;
+      const fCap = captureCount[0];
+      const gCap = captureCount[1];
+      const fAvailable = fOn + fRem;
+      const gAvailable = gOn + gRem;
+      scoreDiv.innerHTML =
+        `Fuchsia – Remaining: ${fRem}, On board: ${fOn}, Captured: ${fCap}<br>` +
+        `Green   – Remaining: ${gRem}, On board: ${gOn}, Captured: ${gCap}`;
+      if ((fAvailable <= 2 || gAvailable <= 2) && (placedCount[0] + placedCount[1] > 0)) {
+        alert((fAvailable > gAvailable ? 'Fuchsia' : 'Green') + ' wins!');
+        rematchBtn.style.display = 'block';
+      }
+    }
+
+    // Highlight management
+    const highlights = [];
+    function clearHighlights() {
+      Object.values(boardState).forEach(o => o.mesh.material.emissive.setHex(0x000000));
+      highlights.forEach(h => scene.remove(h));
+      highlights.length = 0;
+    }
+
+    function checkMill(key, player) {
+      const [x0, y0, z0] = key.split(',').map(Number);
+      for (const axis of ['x', 'y', 'z']) {
+        const line = [];
+        for (let v of [-1, 0, 1]) {
+          const p = { x: x0, y: y0, z: z0 };
+          p[axis] = v;
+          line.push(`${p.x},${p.y},${p.z}`);
+        }
+        if (line.every(k => boardState[k] && boardState[k].player === player)) return true;
+      }
+      return false;
+    }
+
+    function highlightOpponent() {
+      Object.values(boardState).forEach(o => {
+        if (o.player !== currentPlayer) {
+          o.mesh.material.emissive.setHex(0xffff00);
+        }
+      });
+    }
+
+    function switchTurn() {
+      currentPlayer = 1 - currentPlayer;
+      updateTurn();
+    }
+
+    // Cube frame and rods
+    const rodMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.4 });
+    function drawRod(p1, p2) {
+      const dir = p2.clone().sub(p1);
+      const geometry = new THREE.CylinderGeometry(0.02, 0.02, dir.length(), 8);
+      const rod = new THREE.Mesh(geometry, rodMaterial);
+      rod.position.copy(p1).add(p2).multiplyScalar(0.5);
+      rod.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.normalize());
+      scene.add(rod);
+    }
+
+    const coords = [-1, 0, 1];
+    ['x', 'y', 'z'].forEach(axis => {
+      coords.forEach(a => coords.forEach(b => {
+        if (a === 0 && b === 0) return;
+        let p1, p2;
+        if (axis === 'x') { p1 = new THREE.Vector3(-1, a, b); p2 = new THREE.Vector3(1, a, b); }
+        if (axis === 'y') { p1 = new THREE.Vector3(a, -1, b); p2 = new THREE.Vector3(a, 1, b); }
+        if (axis === 'z') { p1 = new THREE.Vector3(a, b, -1); p2 = new THREE.Vector3(a, b, 1); }
+        drawRod(p1, p2);
+      }));
+    });
+
+    // Board points and adjacency
+    const boardPoints = [];
+    coords.forEach(x => coords.forEach(y => coords.forEach(z => {
+      if (x === 0 && y === 0 && z === 0) return;
+      boardPoints.push(new THREE.Vector3(x, y, z));
+    })));
+
+    const adjacency = {};
+    boardPoints.forEach(p => adjacency[p.toArray().join(',')] = []);
+    ['x', 'y', 'z'].forEach(axis => {
+      coords.forEach(a => coords.forEach(b => {
+        if (a === 0 && b === 0) return;
+        let line = [];
+        if (axis === 'x') line = boardPoints.filter(p => p.y === a && p.z === b).sort((u,v) => u.x - v.x);
+        if (axis === 'y') line = boardPoints.filter(p => p.x === a && p.z === b).sort((u,v) => u.y - v.y);
+        if (axis === 'z') line = boardPoints.filter(p => p.x === a && p.y === b).sort((u,v) => u.z - v.z);
+        line.forEach((p, i) => {
+          const key = p.toArray().join(',');
+          if (i > 0) adjacency[key].push(line[i-1].toArray().join(','));
+          if (i < line.length-1) adjacency[key].push(line[i+1].toArray().join(','));
+        });
+      }));
+    });
+
+    const boardGeo = new THREE.SphereGeometry(0.1, 16, 16);
+    const boardMats = [0xFF00FF, 0x89F336].map(color => new THREE.MeshPhongMaterial({ color }));
+
+    // Create side stacks
+    const leftStack = document.getElementById('left');
+    const rightStack = document.getElementById('right');
+    let dragPlayer = null;
+
+    function createPieceDiv(player) {
+      const div = document.createElement('div');
+      div.className = 'piece';
+      div.style.background = player === 0 ? '#FF00FF' : '#89F336';
+      div.draggable = true;
+      div.ondragstart = e => {
+        if (player !== currentPlayer || removalMode) e.preventDefault();
+        else dragPlayer = player;
+      };
+      div.ondragend = e => {
+        const p = dragPlayer;
+        dragPlayer = null;
+        const key = placePhase1(e.clientX, e.clientY, p);
+        if (key) {
+          history.push({ type: 'place', player: p, key });
+          div.remove();
+        } else {
+          if (p === 0) leftStack.appendChild(div);
+          else rightStack.appendChild(div);
+        }
+      };
+      return div;
+    }
+
+    for (let i = 0; i < 13; i++) {
+      leftStack.appendChild(createPieceDiv(0));
+      rightStack.appendChild(createPieceDiv(1));
+    }
+
+    // Phase 1: placement
+    function placePhase1(cx, cy, player) {
+      if (placedCount[player] >= 13) return null;
+      const m = new THREE.Vector2((cx/window.innerWidth)*2-1, -(cy/window.innerHeight)*2+1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(m, camera);
+      let best = null;
+      let bestDist = Infinity;
+      boardPoints.forEach(p => {
+        const proj = p.clone().project(camera);
+        const sx = (proj.x*0.5 + 0.5)*window.innerWidth;
+        const sy = ( -proj.y*0.5 + 0.5)*window.innerHeight;
+        const d = Math.hypot(sx-cx, sy-cy);
+        if (d < bestDist) {
+          bestDist = d;
+          best = p;
+        }
+      });
+      if (best && bestDist < 30) {
+        const key = best.toArray().join(',');
+        if (!boardState[key]) {
+          addPiece(key, player);
+          placedCount[player]++;
+          return key;
+        }
+      }
+      return null;
+    }
+
+    function addPiece(key, player) {
+      const [x, y, z] = key.split(',').map(Number);
+      const mesh = new THREE.Mesh(boardGeo, boardMats[player]);
+      mesh.position.set(x, y, z);
+      scene.add(mesh);
+      boardState[key] = { player, mesh };
+      beep(440, 0.1);
+      updateScores();
+      if (checkMill(key, player)) {
+        beep(880, 0.2);
+        highlightOpponent();
+        removalMode = true;
+      } else {
+        switchTurn();
+      }
+    }
+
+    // Phase 2 & 3: move / fly
+    let selectedKey = null;
+    renderer.domElement.addEventListener('pointerdown', e => {
+      if (removalMode) return;
+      if (placedCount[0] + placedCount[1] < 26) return;
+      const m = new THREE.Vector2((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(m, camera);
+      if (!selectedKey) {
+        const hits = ray.intersectObjects(Object.values(boardState).map(o => o.mesh));
+        if (hits.length) {
+          const mesh = hits[0].object;
+          const key = Object.keys(boardState).find(k => boardState[k].mesh === mesh);
+          if (boardState[key].player === currentPlayer) {
+            const countPieces = Object.values(boardState).filter(o=>o.player===currentPlayer).length;
+            let possible;
+            if (countPieces > 3) {
+            // normal move: adjacent
+            possible = adjacency[key].filter(k => !boardState[k]);
+          } else {
+            // flying: any empty point
+            possible = boardPoints.map(p => p.toArray().join(',')).filter(k => !boardState[k]);
+          }
+            if (possible.length) {
+              selectedKey = key;
+              mesh.material.emissive.setHex(0x0000ff);
+              possible.forEach(dest => {
+                const [dx, dy, dz] = dest.split(',').map(Number);
+                const hint = new THREE.Mesh(
+                  new THREE.SphereGeometry(0.12, 8, 8),
+                  new THREE.MeshBasicMaterial({ color:0xffff00, transparent:true, opacity:0.6 })
+                );
+                hint.position.set(dx, dy, dz);
+                hint.userData.key = dest;
+                scene.add(hint);
+                highlights.push(hint);
+              });
+            } else {
+              negativeBeep();
+            }
+          }
+        }
+      } else {
+        const hits = ray.intersectObjects(highlights);
+        if (hits.length) {
+          const dest = hits[0].object.userData.key;
+          history.push({ type:'move', from:selectedKey, to:dest, player:currentPlayer });
+          const obj = boardState[selectedKey];
+          delete boardState[selectedKey];
+          obj.mesh.material.emissive.setHex(0x000000);
+          obj.mesh.position.copy(hits[0].object.position);
+          boardState[dest] = { player: currentPlayer, mesh: obj.mesh };
+          beep(440, 0.1);
+          updateScores();
+          if (checkMill(dest, currentPlayer)) {
+            beep(880, 0.2);
+            highlightOpponent();
+            removalMode = true;
+          } else {
+            switchTurn();
+          }
+        }
+        if (boardState[selectedKey]) boardState[selectedKey].mesh.material.emissive.setHex(0x000000);
+        selectedKey = null;
+        clearHighlights();
+      }
+    });
+
+    // Removal
+    renderer.domElement.addEventListener('pointerup', e => {
+      if (!removalMode) return;
+      const m = new THREE.Vector2((e.clientX/window.innerWidth)*2-1, -(e.clientY/window.innerHeight)*2+1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(m, camera);
+      const hits = ray.intersectObjects(Object.values(boardState).map(o => o.mesh));
+      if (hits.length) {
+        const mesh = hits[0].object;
+        const key = Object.keys(boardState).find(k => boardState[k].mesh===mesh);
+        if (boardState[key].player !== currentPlayer) {
+          history.push({ type:'remove', key, player: boardState[key].player });
+          const rp = boardState[key].player;
+          scene.remove(mesh);
+          delete boardState[key];
+          captureCount[rp]++;
+          updateScores();
+          clearHighlights();
+          removalMode=false;
+          switchTurn();
+          beep(330, 0.1);
+          checkBlockLoss();
+        }
+      }
+    });
+    function checkBlockLoss() {
+      const opp = currentPlayer;
+      for (const [k, v] of Object.entries(boardState)) {
+        if (v.player !== opp) continue;
+        for (const adj of adjacency[k]) {
+          if (!boardState[adj]) return;
+        }
+      }
+      alert((opp ? 'Green' : 'Fuchsia') + ' has no moves and loses!');
+    }
+
+    // Undo
+    undoBtn.onclick = () => {
+      const act = history.pop();
+      if (!act) return;
+      if (act.type==='place') {
+        const o = boardState[act.key];
+        scene.remove(o.mesh);
+        delete boardState[act.key];
+        placedCount[act.player]--;
+        updateScores();
+        switchTurn();
+        const div = createPieceDiv(act.player);
+        if (act.player===0) leftStack.appendChild(div);
+        else rightStack.appendChild(div);
+      } else if (act.type==='move') {
+        const o = boardState[act.to];
+        o.mesh.position.copy(new THREE.Vector3(...act.from.split(',').map(Number)));
+        delete boardState[act.to];
+        boardState[act.from] = o;
+        updateScores();
+        switchTurn();
+      } else if (act.type==='remove') {
+        const mesh = new THREE.Mesh(boardGeo, boardMats[act.player]);
+        mesh.position.copy(new THREE.Vector3(...act.key.split(',').map(Number)));
+        scene.add(mesh);
+        boardState[act.key] = { player:act.player, mesh };
+        updateScores();
+        switchTurn();
+      }
+      clearHighlights();
+      removalMode=false;
+    };
+
+    // Resize & render loop
+    function onResize() {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onResize);
+    onResize();
+    (function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.clear();
+      renderer.render(scene, camera);
+      const rx = THREE.MathUtils.radToDeg(camera.rotation.x).toFixed(1);
+      const ry = THREE.MathUtils.radToDeg(camera.rotation.y).toFixed(1);
+      const rz = THREE.MathUtils.radToDeg(camera.rotation.z).toFixed(1);
+      rotDiv.innerText = `Rot: X ${rx}°, Y ${ry}°, Z ${rz}°`;
+    })();
+
+    updateScores();
+  };
+  </script>
+</body>
+</html>
+
